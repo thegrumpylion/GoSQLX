@@ -86,7 +86,7 @@ type Statement interface {
 //   - Functions: FunctionCall (with window function support)
 //   - Subqueries: SubqueryExpression, ExistsExpression, AnyExpression, AllExpression
 //   - Conditional: CaseExpression, CastExpression
-//   - Grouping: RollupExpression, CubeExpression, GroupingSetsExpression
+//   - Grouping: RollupExpression, CubeExpression, GroupingSetsExpression, GroupingFunction
 //
 // Example - Building an expression:
 //

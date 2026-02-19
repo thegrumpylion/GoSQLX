@@ -61,6 +61,21 @@ func (g GroupingSetsExpression) Children() []Node {
 	return children
 }
 
+// GroupingFunction represents the GROUPING(col1, col2, ...) function used
+// in SELECT lists with ROLLUP, CUBE, or GROUPING SETS. It returns a bitmask
+// indicating which columns are NULL placeholders from grouping operations
+// versus actual grouped values.
+//
+// Example: GROUPING(service_name) returns 1 when service_name is a rollup
+// NULL (subtotal/grand total row) and 0 when it is a real grouped value.
+type GroupingFunction struct {
+	Args []Expression // Columns to check
+}
+
+func (g *GroupingFunction) expressionNode()     {}
+func (g GroupingFunction) TokenLiteral() string { return "GROUPING" }
+func (g GroupingFunction) Children() []Node     { return nodifyExpressions(g.Args) }
+
 // FunctionCall represents a function call expression with full SQL-99/PostgreSQL support.
 //
 // FunctionCall supports:

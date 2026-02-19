@@ -23,6 +23,37 @@ import (
 	"github.com/ajitpratap0/GoSQLX/pkg/sql/ast"
 )
 
+// parseGroupingFunction parses GROUPING(col1, col2, ...) in expression position.
+// Returns a GroupingFunction AST node. Called from parsePrimaryExpression when
+// the current token is GROUPING followed by (.
+func (p *Parser) parseGroupingFunction() (*ast.GroupingFunction, error) {
+	p.advance() // Consume GROUPING
+	if !p.isType(models.TokenTypeLParen) {
+		return nil, p.expectedError("( after GROUPING")
+	}
+	p.advance() // Consume (
+
+	args := make([]ast.Expression, 0, 1)
+	for {
+		expr, err := p.parseExpression()
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, expr)
+
+		if p.isType(models.TokenTypeRParen) {
+			break
+		}
+		if !p.isType(models.TokenTypeComma) {
+			return nil, p.expectedError(", or ) in GROUPING()")
+		}
+		p.advance() // Consume comma
+	}
+	p.advance() // Consume )
+
+	return &ast.GroupingFunction{Args: args}, nil
+}
+
 // used by ROLLUP and CUBE. Returns error if the list is empty.
 func (p *Parser) parseGroupingExpressionList(keyword string) ([]ast.Expression, error) {
 	if !p.isType(models.TokenTypeLParen) {

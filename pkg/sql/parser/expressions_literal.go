@@ -128,6 +128,18 @@ func (p *Parser) parsePrimaryExpression() (ast.Expression, error) {
 		return p.parseExtractExpression()
 	}
 
+	// GROUPING(col, ...) — SQL-99 function returning a bitmask of which
+	// arguments are NULL placeholders from ROLLUP/CUBE/GROUPING SETS.
+	// GROUPING is tokenized as a dedicated keyword (not a plain
+	// identifier) so the generic identifier-function branch below
+	// can't reach it. Built as a specialized GroupingFunction AST
+	// node rather than a FunctionCall so downstream code can
+	// distinguish it semantically from a user-defined function named
+	// "grouping".
+	if p.isType(models.TokenTypeGrouping) && p.peekToken().Token.Type == models.TokenTypeLParen {
+		return p.parseGroupingFunction()
+	}
+
 	// Oracle/MariaDB pseudo-columns: ROWNUM, ROWID, LEVEL, SYSDATE, SYSTIMESTAMP.
 	// These are tokenized as keywords but act as column-like expressions.
 	// We return them as zero-argument FunctionCall nodes so that implicit

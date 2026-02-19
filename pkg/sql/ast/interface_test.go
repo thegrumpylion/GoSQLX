@@ -69,6 +69,7 @@ func TestExpressionNodeMarkers(t *testing.T) {
 		{"RollupExpression", &RollupExpression{}},
 		{"CubeExpression", &CubeExpression{}},
 		{"GroupingSetsExpression", &GroupingSetsExpression{}},
+		{"GroupingFunction", &GroupingFunction{}},
 		{"Identifier", &Identifier{}},
 		{"FunctionCall", &FunctionCall{}},
 		{"CaseExpression", &CaseExpression{}},
@@ -138,6 +139,7 @@ func TestTokenLiteralMethods(t *testing.T) {
 		{"RollupExpression", RollupExpression{}, "ROLLUP"},
 		{"CubeExpression", CubeExpression{}, "CUBE"},
 		{"GroupingSetsExpression", GroupingSetsExpression{}, "GROUPING SETS"},
+		{"GroupingFunction", GroupingFunction{}, "GROUPING"},
 		{"Identifier", Identifier{Name: "column_name"}, "column_name"},
 		{"FunctionCall", FunctionCall{Name: "COUNT"}, "COUNT"},
 		{"CaseExpression", CaseExpression{}, "CASE"},
@@ -364,6 +366,16 @@ func TestChildrenMethods(t *testing.T) {
 		children := node.Children()
 		if len(children) != 3 {
 			t.Errorf("Children() returned %d, want 3", len(children))
+		}
+	})
+
+	t.Run("GroupingFunction", func(t *testing.T) {
+		node := GroupingFunction{
+			Args: []Expression{testIdent},
+		}
+		children := node.Children()
+		if len(children) != 1 {
+			t.Errorf("Children() returned %d, want 1", len(children))
 		}
 	})
 

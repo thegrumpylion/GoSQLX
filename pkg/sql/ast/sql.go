@@ -515,6 +515,13 @@ func (g *GroupingSetsExpression) SQL() string {
 	return "GROUPING SETS(" + strings.Join(sets, ", ") + ")"
 }
 
+func (g *GroupingFunction) SQL() string {
+	if g == nil {
+		return ""
+	}
+	return "GROUPING(" + exprListSQL(g.Args) + ")"
+}
+
 // ============================================================
 // Statements
 // ============================================================
