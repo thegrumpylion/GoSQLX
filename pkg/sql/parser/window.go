@@ -446,10 +446,10 @@ func (p *Parser) parseWindowSpec() (*ast.WindowSpec, error) {
 		}
 	}
 
-	// Parse frame clause (ROWS/RANGE with bounds)
-	if p.isAnyType(models.TokenTypeRows, models.TokenTypeRange) {
+	// Parse frame clause (ROWS/RANGE/GROUPS with bounds)
+	if p.isAnyType(models.TokenTypeRows, models.TokenTypeRange, models.TokenTypeGroups) {
 		frameType := p.currentToken.Token.Value
-		p.advance() // Consume ROWS/RANGE
+		p.advance() // Consume ROWS/RANGE/GROUPS
 
 		frameClause, err := p.parseWindowFrame(frameType)
 		if err != nil {
