@@ -1819,6 +1819,43 @@ func (d *DescribeStatement) SQL() string {
 	return "DESCRIBE " + d.TableName
 }
 
+// SQL returns the SQL string for an EXPLAIN statement.
+// Form: EXPLAIN [ANALYZE] [FORMAT=<fmt>] <inner>
+//
+// If the inner Statement has no SQL() method the output includes an
+// inline comment marking the problem — a silent empty body would
+// corrupt round-trip without any signal. In practice only legitimate
+// EXPLAIN inners (SELECT / INSERT / UPDATE / DELETE / WITH / EXPLAIN /
+// UnsupportedStatement) should reach this path; the parser is
+// responsible for rejecting nonsense inners.
+func (e *ExplainStatement) SQL() string {
+	if e == nil {
+		return ""
+	}
+	sb := getBuilder()
+	defer putBuilder(sb)
+	sb.WriteString("EXPLAIN")
+	if e.Analyze {
+		sb.WriteString(" ANALYZE")
+	}
+	if e.Format != "" {
+		sb.WriteString(" FORMAT=")
+		sb.WriteString(e.Format)
+	}
+	if e.Statement == nil {
+		return sb.String()
+	}
+	sb.WriteString(" ")
+	if inner, ok := e.Statement.(interface{ SQL() string }); ok {
+		sb.WriteString(inner.SQL())
+	} else {
+		sb.WriteString("/* inner ")
+		sb.WriteString(e.Statement.TokenLiteral())
+		sb.WriteString(" has no SQL() */")
+	}
+	return sb.String()
+}
+
 // SQL returns the SQL string for a REPLACE statement (MySQL).
 func (r *ReplaceStatement) SQL() string {
 	if r == nil {

@@ -674,6 +674,35 @@ func (u *UnsupportedStatement) statementNode()      {}
 func (u UnsupportedStatement) TokenLiteral() string { return u.Kind }
 func (u UnsupportedStatement) Children() []Node     { return nil }
 
+// SQL returns the original SQL fragment, so EXPLAIN of unmodeled statement
+// kinds round-trips faithfully.
+func (u *UnsupportedStatement) SQL() string {
+	if u == nil {
+		return ""
+	}
+	return u.RawSQL
+}
+
+// ExplainStatement represents EXPLAIN [ANALYZE] [FORMAT=<fmt>] <inner>.
+// Unlike DescribeStatement (MySQL DESCRIBE table_name), this carries a full
+// inner Statement — SELECT, INSERT, UPDATE, DELETE, WITH, etc. Ownership
+// of the inner is transferred to the ExplainStatement; pooled release via
+// PutExplainStatement recursively releases the inner.
+type ExplainStatement struct {
+	Statement Statement
+	Analyze   bool
+	Format    string
+}
+
+func (e *ExplainStatement) statementNode()      {}
+func (e ExplainStatement) TokenLiteral() string { return "EXPLAIN" }
+func (e ExplainStatement) Children() []Node {
+	if e.Statement == nil {
+		return nil
+	}
+	return []Node{e.Statement}
+}
+
 // ReplaceStatement represents MySQL REPLACE INTO statement
 type ReplaceStatement struct {
 	TableName string

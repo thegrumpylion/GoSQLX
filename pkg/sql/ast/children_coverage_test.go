@@ -194,6 +194,7 @@ func childrenCoverageCases() []childrenCoverageCase {
 		{"PragmaStatement", reflect.TypeOf(PragmaStatement{})},
 		{"ShowStatement", reflect.TypeOf(ShowStatement{})},
 		{"DescribeStatement", reflect.TypeOf(DescribeStatement{})},
+		{"ExplainStatement", reflect.TypeOf(ExplainStatement{})},
 		{"UnsupportedStatement", reflect.TypeOf(UnsupportedStatement{})},
 
 		// Temporal / Snowflake / SQL Server table-expression clauses

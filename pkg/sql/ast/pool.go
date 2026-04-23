@@ -159,6 +159,12 @@ var (
 		},
 	}
 
+	explainStmtPool = sync.Pool{
+		New: func() interface{} {
+			return &ExplainStatement{}
+		},
+	}
+
 	unsupportedStmtPool = sync.Pool{
 		New: func() interface{} {
 			return &UnsupportedStatement{}
@@ -591,6 +597,8 @@ func releaseStatement(stmt Statement) {
 		PutShowStatement(s)
 	case *DescribeStatement:
 		PutDescribeStatement(s)
+	case *ExplainStatement:
+		PutExplainStatement(s)
 	case *UnsupportedStatement:
 		PutUnsupportedStatement(s)
 	case *ReplaceStatement:
@@ -795,6 +803,29 @@ func PutDescribeStatement(stmt *DescribeStatement) {
 	stmt.TableName = ""
 
 	describeStmtPool.Put(stmt)
+}
+
+// GetExplainStatement gets an ExplainStatement from the pool.
+func GetExplainStatement() *ExplainStatement {
+	return explainStmtPool.Get().(*ExplainStatement)
+}
+
+// PutExplainStatement returns an ExplainStatement to the pool.
+// Recursively releases the nested inner Statement — matches the
+// wrapper-owns-inner convention shared with PutCreateViewStatement,
+// PutCreateMaterializedViewStatement, and PutInsertStatement. Callers
+// must not retain aliases to the inner after calling this.
+func PutExplainStatement(stmt *ExplainStatement) {
+	if stmt == nil {
+		return
+	}
+
+	releaseStatement(stmt.Statement)
+	stmt.Statement = nil
+	stmt.Analyze = false
+	stmt.Format = ""
+
+	explainStmtPool.Put(stmt)
 }
 
 // GetUnsupportedStatement gets an UnsupportedStatement from the pool.

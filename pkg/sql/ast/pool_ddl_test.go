@@ -709,6 +709,177 @@ func TestDescribeStatementPool(t *testing.T) {
 }
 
 // ============================================================
+// ExplainStatement pool tests
+// ============================================================
+
+func TestExplainStatementPool(t *testing.T) {
+	t.Run("Get returns non-nil", func(t *testing.T) {
+		stmt := GetExplainStatement()
+		if stmt == nil {
+			t.Fatal("GetExplainStatement() returned nil")
+		}
+		PutExplainStatement(stmt)
+	})
+
+	t.Run("Put nil is safe", func(t *testing.T) {
+		PutExplainStatement(nil)
+	})
+
+	t.Run("Fields zeroed after Put", func(t *testing.T) {
+		stmt := GetExplainStatement()
+		inner := GetDescribeStatement()
+		inner.TableName = "t"
+		stmt.Statement = inner
+		stmt.Analyze = true
+		stmt.Format = "JSON"
+
+		PutExplainStatement(stmt)
+
+		if stmt.Statement != nil {
+			t.Errorf("Statement not cleared, got %#v", stmt.Statement)
+		}
+		if stmt.Analyze {
+			t.Error("Analyze not cleared")
+		}
+		if stmt.Format != "" {
+			t.Errorf("Format not cleared, got %q", stmt.Format)
+		}
+	})
+
+	t.Run("Pool roundtrip reuse", func(t *testing.T) {
+		stmt1 := GetExplainStatement()
+		stmt1.Analyze = true
+		stmt1.Format = "TEXT"
+		PutExplainStatement(stmt1)
+
+		stmt2 := GetExplainStatement()
+		if stmt2.Analyze || stmt2.Format != "" || stmt2.Statement != nil {
+			t.Errorf("Reused statement not clean: %+v", stmt2)
+		}
+		PutExplainStatement(stmt2)
+	})
+
+	t.Run("Recursively releases inner", func(t *testing.T) {
+		// Inner is pooled; after PutExplainStatement, the inner must be
+		// zeroed because releaseStatement -> PutDescribeStatement ran.
+		outer := GetExplainStatement()
+		inner := GetDescribeStatement()
+		inner.TableName = "orders"
+		outer.Statement = inner
+
+		PutExplainStatement(outer)
+
+		if inner.TableName != "" {
+			t.Errorf("inner TableName not cleared — PutExplainStatement "+
+				"did not recursively release: got %q", inner.TableName)
+		}
+	})
+}
+
+func TestExplainStatementChildren(t *testing.T) {
+	t.Run("nil inner returns nil", func(t *testing.T) {
+		e := &ExplainStatement{}
+		if kids := e.Children(); kids != nil {
+			t.Errorf("expected nil children, got %v", kids)
+		}
+	})
+
+	t.Run("non-nil inner returned as single child", func(t *testing.T) {
+		inner := &DescribeStatement{TableName: "users"}
+		e := &ExplainStatement{Statement: inner}
+		kids := e.Children()
+		if len(kids) != 1 {
+			t.Fatalf("expected 1 child, got %d", len(kids))
+		}
+		// Statement is an interface — the underlying pointer survives
+		// the value-receiver copy, so pointer equality holds.
+		if kids[0] != inner {
+			t.Errorf("child mismatch: want %p got %p", inner, kids[0])
+		}
+	})
+
+	t.Run("Children() works through Node interface", func(t *testing.T) {
+		inner := &DescribeStatement{TableName: "users"}
+		var n Node = &ExplainStatement{Statement: inner}
+		kids := n.Children()
+		if len(kids) != 1 || kids[0] != inner {
+			t.Errorf("interface dispatch broken: got %v", kids)
+		}
+	})
+}
+
+func TestExplainStatementSQL(t *testing.T) {
+	t.Run("bare EXPLAIN with inner that has SQL()", func(t *testing.T) {
+		e := &ExplainStatement{Statement: &DescribeStatement{TableName: "t"}}
+		got := e.SQL()
+		want := "EXPLAIN DESCRIBE t"
+		if got != want {
+			t.Errorf("SQL(): got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("ANALYZE + FORMAT", func(t *testing.T) {
+		e := &ExplainStatement{
+			Statement: &DescribeStatement{TableName: "t"},
+			Analyze:   true,
+			Format:    "JSON",
+		}
+		got := e.SQL()
+		want := "EXPLAIN ANALYZE FORMAT=JSON DESCRIBE t"
+		if got != want {
+			t.Errorf("SQL(): got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("flag permutations — no trailing space", func(t *testing.T) {
+		cases := []struct {
+			name string
+			e    ExplainStatement
+			want string
+		}{
+			{"bare", ExplainStatement{}, "EXPLAIN"},
+			{"analyze only", ExplainStatement{Analyze: true}, "EXPLAIN ANALYZE"},
+			{"format only", ExplainStatement{Format: "JSON"}, "EXPLAIN FORMAT=JSON"},
+			{"analyze + format", ExplainStatement{Analyze: true, Format: "TEXT"}, "EXPLAIN ANALYZE FORMAT=TEXT"},
+		}
+		for _, tc := range cases {
+			got := tc.e.SQL()
+			if got != tc.want {
+				t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+			}
+		}
+	})
+
+	t.Run("UnsupportedStatement round-trips via RawSQL", func(t *testing.T) {
+		e := &ExplainStatement{
+			Statement: &UnsupportedStatement{Kind: "COPY", RawSQL: "COPY t FROM 's3://x'"},
+		}
+		got := e.SQL()
+		want := "EXPLAIN COPY t FROM 's3://x'"
+		if got != want {
+			t.Errorf("SQL(): got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("inner without SQL() — loud diagnostic fallback", func(t *testing.T) {
+		e := &ExplainStatement{Statement: noSQLStatement{kind: "MOCK"}}
+		got := e.SQL()
+		want := "EXPLAIN /* inner MOCK has no SQL() */"
+		if got != want {
+			t.Errorf("fallback: got %q, want %q", got, want)
+		}
+	})
+}
+
+// noSQLStatement is a test-only Statement with no SQL() method, used to
+// exercise ExplainStatement.SQL()'s defensive fallback path.
+type noSQLStatement struct{ kind string }
+
+func (noSQLStatement) statementNode()       {}
+func (s noSQLStatement) TokenLiteral() string { return s.kind }
+func (noSQLStatement) Children() []Node     { return nil }
+
+// ============================================================
 // UnsupportedStatement pool tests
 // ============================================================
 
