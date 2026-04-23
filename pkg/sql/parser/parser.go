@@ -727,7 +727,10 @@ func (p *Parser) parseStatement() (ast.Statement, error) {
 	case models.TokenTypeShow:
 		p.advance()
 		return p.parseShowStatement()
-	case models.TokenTypeDescribe, models.TokenTypeExplain, models.TokenTypeDesc:
+	case models.TokenTypeExplain:
+		p.advance()
+		return p.parseExplainStatement()
+	case models.TokenTypeDescribe, models.TokenTypeDesc:
 		// DESC is the ORDER-BY sort-direction token but also a synonym for
 		// DESCRIBE at statement position (Oracle, Snowflake, MySQL).
 		p.advance()

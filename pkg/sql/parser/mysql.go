@@ -21,6 +21,7 @@ import (
 	goerrors "github.com/ajitpratap0/GoSQLX/pkg/errors"
 	"github.com/ajitpratap0/GoSQLX/pkg/models"
 	"github.com/ajitpratap0/GoSQLX/pkg/sql/ast"
+	"github.com/ajitpratap0/GoSQLX/pkg/sql/keywords"
 )
 
 // parseMatchAgainst parses MySQL MATCH(...) AGAINST('text' [IN NATURAL LANGUAGE MODE | IN BOOLEAN MODE | WITH QUERY EXPANSION])
@@ -193,6 +194,132 @@ func (p *Parser) parseDescribeStatement() (ast.Statement, error) {
 	desc := ast.GetDescribeStatement()
 	desc.TableName = name
 	return desc, nil
+}
+
+// parseExplainStatement parses:
+//
+//	EXPLAIN [ANALYZE] [FORMAT[=]<ident>] <inner-stmt>
+//	EXPLAIN <table_name>   // MySQL/MariaDB DESCRIBE synonym
+//
+// The caller has already consumed the EXPLAIN keyword. If the tokens that
+// follow look like a statement start (SELECT / WITH / INSERT / UPDATE /
+// DELETE / MERGE / nested EXPLAIN), they are parsed as the inner statement
+// and wrapped in an ExplainStatement. Otherwise — and only when neither
+// ANALYZE nor FORMAT was seen — the function delegates to
+// parseDescribeStatement so MySQL/MariaDB's "EXPLAIN users" shorthand
+// still yields a DescribeStatement. Other dialects reject the bare-name
+// form with a clear error.
+//
+// Depth bookkeeping: p.depth / MaxRecursionDepth is shared across all
+// recursive parse paths (expressions, CTEs, subqueries, nested EXPLAIN).
+// A deeply nested EXPLAIN EXPLAIN ... SELECT chain consumes one level
+// per EXPLAIN, so the cap (100) covers normal usage with room to spare
+// even combined with deep CTEs and expressions.
+//
+// Known edge case: `EXPLAIN analyze` / `EXPLAIN format` always treat the
+// identifier as the option keyword, never as a table name. The tokenizer
+// loses the backtick/double-quote distinction, so the parser cannot tell
+// `ANALYZE` (keyword) from `` `analyze` `` (quoted identifier). Users who
+// need to DESCRIBE a table literally named "analyze" or "format" must
+// spell it as `DESCRIBE "analyze"` / `DESCRIBE "format"` instead.
+func (p *Parser) parseExplainStatement() (ast.Statement, error) {
+	p.depth++
+	defer func() { p.depth-- }()
+	if p.depth > MaxRecursionDepth {
+		return nil, goerrors.InvalidSyntaxError(
+			fmt.Sprintf("maximum recursion depth exceeded (%d) at EXPLAIN", MaxRecursionDepth),
+			p.currentLocation(),
+			"",
+		)
+	}
+
+	analyze := false
+	if p.isTokenMatch("ANALYZE") {
+		p.advance()
+		analyze = true
+	}
+
+	format := ""
+	if p.isTokenMatch("FORMAT") {
+		p.advance()
+		// Accept both FORMAT=<ident> (MySQL) and FORMAT <ident> (permissive).
+		if p.isType(models.TokenTypeEq) {
+			p.advance()
+		}
+		if !p.isIdentifier() {
+			return nil, p.expectedError("format identifier (TRADITIONAL, JSON, TREE) — string literals are not accepted")
+		}
+		// Normalize to upper-case so downstream consumers can compare
+		// with a single canonical spelling.
+		format = strings.ToUpper(p.currentToken.Token.Value)
+		p.advance()
+	}
+
+	if isExplainInnerStart(p.currentToken.Token.Type) {
+		inner, err := p.parseStatement()
+		if err != nil {
+			return nil, err
+		}
+		ex := ast.GetExplainStatement()
+		ex.Statement = inner
+		ex.Analyze = analyze
+		ex.Format = format
+		return ex, nil
+	}
+
+	// No statement-start tokens. If we've already seen ANALYZE or FORMAT
+	// options, "EXPLAIN ANALYZE users" is not a valid DESCRIBE synonym —
+	// force a clear error rather than silently dropping the options.
+	// Non-MySQL dialects also reject the bare-name form so they see the
+	// same message instead of an incongruous "expected table name" from
+	// parseDescribeStatement.
+	if analyze || format != "" || !p.isExplainDescribeDialect() {
+		return nil, p.expectedError("SELECT, INSERT, UPDATE, DELETE, MERGE, WITH, or EXPLAIN after EXPLAIN")
+	}
+
+	// Bare EXPLAIN <table_name> — MySQL / MariaDB synonym for DESCRIBE.
+	return p.parseDescribeStatement()
+}
+
+// isExplainInnerStart reports whether t can legitimately begin a statement
+// that is a valid EXPLAIN inner. The list is tight on purpose: each entry
+// must correspond to a real dispatch case in parseStatement, otherwise
+// we'd whitelist a token and then blow up with an unhelpful
+// "expected statement" error inside parseStatement. A bare identifier is
+// deliberately not here — that path belongs to the MySQL/MariaDB
+// EXPLAIN-as-DESCRIBE synonym handled by the caller.
+func isExplainInnerStart(t models.TokenType) bool {
+	switch t {
+	case models.TokenTypeSelect,
+		models.TokenTypeWith,
+		models.TokenTypeInsert,
+		models.TokenTypeUpdate,
+		models.TokenTypeDelete,
+		models.TokenTypeMerge,
+		// Allow nested EXPLAIN — parser.depth / MaxRecursionDepth caps abuse.
+		models.TokenTypeExplain:
+		return true
+	}
+	return false
+}
+
+// isExplainDescribeDialect reports whether the current dialect accepts
+// MySQL's "EXPLAIN <table>" shorthand for DESCRIBE. MySQL and MariaDB
+// support it; other dialects don't.
+//
+// Reads through p.Dialect() rather than p.dialect directly so the default
+// ("" → "postgresql") is resolved consistently: a parser built without
+// WithDialect() observes the same EXPLAIN behaviour as one explicitly
+// constructed with DialectPostgreSQL.
+func (p *Parser) isExplainDescribeDialect() bool {
+	switch p.Dialect() {
+	case string(keywords.DialectMySQL),
+		string(keywords.DialectMariaDB),
+		string(keywords.DialectGeneric),
+		string(keywords.DialectUnknown):
+		return true
+	}
+	return false
 }
 
 // parseReplaceStatement parses MySQL REPLACE INTO statement
