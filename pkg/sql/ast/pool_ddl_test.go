@@ -732,6 +732,7 @@ func TestExplainStatementPool(t *testing.T) {
 		stmt.Statement = inner
 		stmt.Analyze = true
 		stmt.Format = "JSON"
+		stmt.Mode = "PLAN"
 
 		PutExplainStatement(stmt)
 
@@ -744,16 +745,20 @@ func TestExplainStatementPool(t *testing.T) {
 		if stmt.Format != "" {
 			t.Errorf("Format not cleared, got %q", stmt.Format)
 		}
+		if stmt.Mode != "" {
+			t.Errorf("Mode not cleared, got %q", stmt.Mode)
+		}
 	})
 
 	t.Run("Pool roundtrip reuse", func(t *testing.T) {
 		stmt1 := GetExplainStatement()
 		stmt1.Analyze = true
 		stmt1.Format = "TEXT"
+		stmt1.Mode = "PIPELINE"
 		PutExplainStatement(stmt1)
 
 		stmt2 := GetExplainStatement()
-		if stmt2.Analyze || stmt2.Format != "" || stmt2.Statement != nil {
+		if stmt2.Analyze || stmt2.Format != "" || stmt2.Mode != "" || stmt2.Statement != nil {
 			t.Errorf("Reused statement not clean: %+v", stmt2)
 		}
 		PutExplainStatement(stmt2)

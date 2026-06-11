@@ -1835,6 +1835,10 @@ func (e *ExplainStatement) SQL() string {
 	sb := getBuilder()
 	defer putBuilder(sb)
 	sb.WriteString("EXPLAIN")
+	if e.Mode != "" {
+		sb.WriteString(" ")
+		sb.WriteString(e.Mode)
+	}
 	if e.Analyze {
 		sb.WriteString(" ANALYZE")
 	}

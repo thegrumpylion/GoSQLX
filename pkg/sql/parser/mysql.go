@@ -233,14 +233,49 @@ func (p *Parser) parseExplainStatement() (ast.Statement, error) {
 		)
 	}
 
+	// ClickHouse EXPLAIN modifier: AST | SYNTAX | PLAN | PIPELINE |
+	// ESTIMATE | QUERY TREE, optionally followed by a bare settings list
+	// (header=1, actions=1, ...) which is consumed and discarded.
+	// Dialect-gated: under every other dialect these stay plain
+	// identifiers and fall through to the existing paths (for the
+	// MySQL family that is the EXPLAIN-<table> DESCRIBE synonym).
+	mode := ""
+	if p.Dialect() == string(keywords.DialectClickHouse) {
+		m, err := p.parseClickHouseExplainMode()
+		if err != nil {
+			return nil, err
+		}
+		mode = m
+	}
+
+	// PostgreSQL parenthesised options list: EXPLAIN (opt [val], ...).
+	// Dialect-gated to PostgreSQL and Redshift (which inherits the
+	// grammar); under other dialects LPAREN after EXPLAIN keeps failing
+	// with the statement-start error below.
 	analyze := false
-	if p.isTokenMatch("ANALYZE") {
+	format := ""
+	parenForm := false
+	if p.isType(models.TokenTypeLParen) && p.isExplainParenOptionsDialect() {
+		a, f, err := p.parseExplainParenOptions()
+		if err != nil {
+			return nil, err
+		}
+		analyze, format = a, f
+		parenForm = true
+		// PostgreSQL does not allow mixing the parenthesised form with
+		// bare options; accepting the mix here would let a bare ANALYZE
+		// silently override a parenthesised ANALYZE FALSE.
+		if p.isTokenMatch("ANALYZE") || p.isTokenMatch("ANALYSE") || p.isTokenMatch("FORMAT") {
+			return nil, p.expectedError("a statement after the EXPLAIN options list (bare options cannot be mixed with the parenthesised form)")
+		}
+	}
+
+	if !parenForm && p.isTokenMatch("ANALYZE") {
 		p.advance()
 		analyze = true
 	}
 
-	format := ""
-	if p.isTokenMatch("FORMAT") {
+	if !parenForm && p.isTokenMatch("FORMAT") {
 		p.advance()
 		// Accept both FORMAT=<ident> (MySQL) and FORMAT <ident> (permissive).
 		if p.isType(models.TokenTypeEq) {
@@ -264,6 +299,7 @@ func (p *Parser) parseExplainStatement() (ast.Statement, error) {
 		ex.Statement = inner
 		ex.Analyze = analyze
 		ex.Format = format
+		ex.Mode = mode
 		return ex, nil
 	}
 
@@ -273,7 +309,7 @@ func (p *Parser) parseExplainStatement() (ast.Statement, error) {
 	// Non-MySQL dialects also reject the bare-name form so they see the
 	// same message instead of an incongruous "expected table name" from
 	// parseDescribeStatement.
-	if analyze || format != "" || !p.isExplainDescribeDialect() {
+	if analyze || format != "" || mode != "" || !p.isExplainDescribeDialect() {
 		return nil, p.expectedError("SELECT, INSERT, UPDATE, DELETE, MERGE, WITH, or EXPLAIN after EXPLAIN")
 	}
 
@@ -320,6 +356,169 @@ func (p *Parser) isExplainDescribeDialect() bool {
 		return true
 	}
 	return false
+}
+
+// isExplainParenOptionsDialect reports whether the current dialect
+// accepts PostgreSQL's parenthesised EXPLAIN options list. Redshift
+// inherits the PostgreSQL grammar.
+func (p *Parser) isExplainParenOptionsDialect() bool {
+	switch p.Dialect() {
+	case string(keywords.DialectPostgreSQL),
+		string(keywords.DialectRedshift):
+		return true
+	}
+	return false
+}
+
+// parseExplainParenOptions parses PostgreSQL's EXPLAIN options list:
+//
+//	( option [ value ] [, ...] )
+//
+// ANALYZE and FORMAT map onto the AST; every other option of that shape
+// (VERBOSE, COSTS, BUFFERS, WAL, TIMING, SUMMARY, ...) is consumed and
+// discarded — the modelled pair is all the AST carries, and accepting
+// the rest by shape keeps the parser stable as PostgreSQL grows options
+// (the server rejects genuinely unknown ones on its side).
+//
+// The caller has verified the current token is LPAREN and the dialect
+// accepts the form.
+//
+// Deliberate superset notes: the tokenizer strips quotes, so
+// FORMAT 'json' is accepted where PostgreSQL requires an unquoted
+// word; YES/NO are accepted as booleans alongside PostgreSQL's
+// TRUE/FALSE/ON/OFF/1/0; option VALUES are not validated against the
+// option (FORMAT SELECT yields Format="SELECT"). The server-side
+// grammar remains the authority on validity — this parser's job is a
+// faithful AST for well-formed input and a loud error for
+// structurally broken input.
+func (p *Parser) parseExplainParenOptions() (analyze bool, format string, err error) {
+	p.advance() // consume (
+	if p.isType(models.TokenTypeRParen) {
+		return false, "", p.expectedError("EXPLAIN option name, not an empty options list")
+	}
+	for {
+		if !isWordValue(p.currentToken.Token.Value) {
+			return analyze, format, p.expectedError("EXPLAIN option name")
+		}
+		name := strings.ToUpper(p.currentToken.Token.Value)
+		p.advance()
+
+		switch name {
+		case "ANALYZE", "ANALYSE":
+			val := true
+			if !p.isType(models.TokenTypeComma) && !p.isType(models.TokenTypeRParen) {
+				val, err = p.parseExplainBoolOption(name)
+				if err != nil {
+					return analyze, format, err
+				}
+			}
+			analyze = val
+		case "FORMAT":
+			if !isWordValue(p.currentToken.Token.Value) {
+				return analyze, format, p.expectedError("format identifier (TEXT, XML, JSON, YAML) after FORMAT")
+			}
+			format = strings.ToUpper(p.currentToken.Token.Value)
+			p.advance()
+		default:
+			// Unmodelled option: consume its optional single-token value.
+			if !p.isType(models.TokenTypeComma) && !p.isType(models.TokenTypeRParen) {
+				if p.currentToken.Token.Value == "" {
+					return analyze, format, p.expectedError("EXPLAIN option value, ',' or ')'")
+				}
+				p.advance()
+			}
+		}
+
+		if p.isType(models.TokenTypeComma) {
+			p.advance()
+			continue
+		}
+		if p.isType(models.TokenTypeRParen) {
+			p.advance()
+			return analyze, format, nil
+		}
+		return analyze, format, p.expectedError("',' or ')' in EXPLAIN options list")
+	}
+}
+
+// parseExplainBoolOption parses the boolean value of a parenthesised
+// EXPLAIN option, accepting PostgreSQL's spellings.
+func (p *Parser) parseExplainBoolOption(option string) (bool, error) {
+	switch strings.ToUpper(p.currentToken.Token.Value) {
+	case "TRUE", "ON", "1", "YES":
+		p.advance()
+		return true, nil
+	case "FALSE", "OFF", "0", "NO":
+		p.advance()
+		return false, nil
+	}
+	return false, p.expectedError("boolean value for EXPLAIN option " + option)
+}
+
+// parseClickHouseExplainMode recognises ClickHouse's EXPLAIN modifier
+// (AST | SYNTAX | PLAN | PIPELINE | ESTIMATE | QUERY TREE) and consumes
+// the optional bare settings list that may follow it. Returns "" when
+// the next tokens are not a modifier — plain EXPLAIN <stmt> stays valid
+// under ClickHouse.
+func (p *Parser) parseClickHouseExplainMode() (string, error) {
+	switch {
+	case p.isTokenMatch("PLAN"),
+		p.isTokenMatch("PIPELINE"),
+		p.isTokenMatch("SYNTAX"),
+		p.isTokenMatch("ESTIMATE"),
+		p.isTokenMatch("AST"):
+		mode := strings.ToUpper(p.currentToken.Token.Value)
+		p.advance()
+		return mode, p.consumeClickHouseExplainSettings()
+	case p.isTokenMatch("QUERY"):
+		// Two-token modifier QUERY TREE. A lone QUERY is not a modifier
+		// (nor a valid inner start) — leave it for the error downstream.
+		if strings.EqualFold(p.peekToken().Token.Value, "TREE") {
+			p.advance()
+			p.advance()
+			return "QUERY TREE", p.consumeClickHouseExplainSettings()
+		}
+	}
+	return "", nil
+}
+
+// consumeClickHouseExplainSettings consumes the optional bare settings
+// list (name = value [, ...]) between a ClickHouse EXPLAIN modifier and
+// the inner statement. Settings are consumed and discarded so the AST
+// stays dialect-neutral; callers that need them can extend the AST
+// later. Discard-by-shape means a token sequence like FORMAT=JSON in
+// settings position is also consumed as a setting — not mapped onto
+// the Format field — which matches ClickHouse, where FORMAT is a
+// trailing output clause, not a pre-statement option.
+func (p *Parser) consumeClickHouseExplainSettings() error {
+	for p.isIdentifier() && p.peekToken().Token.Type == models.TokenTypeEq {
+		p.advance() // setting name
+		p.advance() // =
+		if p.currentToken.Token.Value == "" || p.isType(models.TokenTypeComma) {
+			return p.expectedError("value for EXPLAIN setting")
+		}
+		p.advance() // value
+		if p.isType(models.TokenTypeComma) {
+			p.advance()
+			// A comma commits to another setting; trailing commas are
+			// not silently swallowed into the inner statement.
+			if !p.isIdentifier() || p.peekToken().Token.Type != models.TokenTypeEq {
+				return p.expectedError("another EXPLAIN setting after ','")
+			}
+		}
+	}
+	return nil
+}
+
+// isWordValue reports whether s looks like a bare word (an option or
+// format name): letters only at the first character is enough to tell
+// words apart from punctuation/EOF token values.
+func isWordValue(s string) bool {
+	if s == "" {
+		return false
+	}
+	c := s[0]
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 // parseReplaceStatement parses MySQL REPLACE INTO statement

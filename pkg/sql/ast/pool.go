@@ -955,6 +955,7 @@ func PutExplainStatement(stmt *ExplainStatement) {
 	stmt.Statement = nil
 	stmt.Analyze = false
 	stmt.Format = ""
+	stmt.Mode = ""
 
 	explainStmtPool.Put(stmt)
 }

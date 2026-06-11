@@ -709,6 +709,10 @@ type ExplainStatement struct {
 	Statement Statement
 	Analyze   bool
 	Format    string
+	// Mode is the ClickHouse EXPLAIN modifier (AST, SYNTAX, PLAN,
+	// PIPELINE, ESTIMATE, QUERY TREE), stored upper-case like Format.
+	// Empty for the default mode and for all other dialects.
+	Mode string
 }
 
 func (e *ExplainStatement) statementNode()      {}
