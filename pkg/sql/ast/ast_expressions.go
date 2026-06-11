@@ -153,6 +153,7 @@ func (g GroupingFunction) Children() []Node     { return nodifyExpressions(g.Arg
 //   - OrderBy: ORDER BY clause for order-sensitive aggregates (STRING_AGG, ARRAY_AGG, etc.)
 //   - WithinGroup: ORDER BY clause for ordered-set aggregates (PERCENTILE_CONT, PERCENTILE_DISC, MODE, etc.)
 type FunctionCall struct {
+	poolGuard
 	Name          string
 	Arguments     []Expression // Renamed from Args for consistency
 	Parameters    []Expression // ClickHouse parametric aggregates: quantile(0.5)(x) — params before args
@@ -191,6 +192,7 @@ func (f FunctionCall) Children() []Node {
 
 // CaseExpression represents a CASE expression
 type CaseExpression struct {
+	poolGuard
 	Value       Expression // Optional CASE value
 	WhenClauses []WhenClause
 	ElseClause  Expression
@@ -236,6 +238,7 @@ func (w WhenClause) Children() []Node {
 
 // ExistsExpression represents EXISTS (subquery)
 type ExistsExpression struct {
+	poolGuard
 	Subquery Statement
 }
 
@@ -250,6 +253,7 @@ func (e ExistsExpression) Children() []Node {
 
 // InExpression represents expr IN (values) or expr IN (subquery)
 type InExpression struct {
+	poolGuard
 	Expr     Expression
 	List     []Expression // For value list: IN (1, 2, 3)
 	Subquery Statement    // For subquery: IN (SELECT ...)
@@ -273,6 +277,7 @@ func (i InExpression) Children() []Node {
 
 // SubqueryExpression represents a scalar subquery (SELECT ...)
 type SubqueryExpression struct {
+	poolGuard
 	Subquery Statement
 	Pos      models.Location // Source position of the opening parenthesis (1-based line and column)
 }
@@ -288,6 +293,7 @@ func (s SubqueryExpression) Children() []Node {
 
 // AnyExpression represents expr op ANY (subquery)
 type AnyExpression struct {
+	poolGuard
 	Expr     Expression
 	Operator string
 	Subquery Statement
@@ -308,6 +314,7 @@ func (a AnyExpression) Children() []Node {
 
 // AllExpression represents expr op ALL (subquery)
 type AllExpression struct {
+	poolGuard
 	Expr     Expression
 	Operator string
 	Subquery Statement
@@ -328,6 +335,7 @@ func (al AllExpression) Children() []Node {
 
 // BetweenExpression represents expr BETWEEN lower AND upper
 type BetweenExpression struct {
+	poolGuard
 	Expr  Expression
 	Lower Expression
 	Upper Expression
@@ -461,6 +469,7 @@ func (b BetweenExpression) Children() []Node {
 //   - ?& (QuestionAnd): All of the keys exist
 //   - #- (HashMinus): Delete key from JSON
 type BinaryExpression struct {
+	poolGuard
 	Left     Expression
 	Operator string
 	Right    Expression
@@ -491,6 +500,7 @@ func (b BinaryExpression) Children() []Node {
 
 // ListExpression represents a list of expressions (1, 2, 3)
 type ListExpression struct {
+	poolGuard
 	Values []Expression
 }
 
@@ -501,6 +511,7 @@ func (l ListExpression) Children() []Node     { return nodifyExpressions(l.Value
 // TupleExpression represents a row constructor / tuple (col1, col2) for multi-column comparisons
 // Used in: WHERE (user_id, status) IN ((1, 'active'), (2, 'pending'))
 type TupleExpression struct {
+	poolGuard
 	Expressions []Expression
 }
 
@@ -517,6 +528,7 @@ func (t TupleExpression) Children() []Node     { return nodifyExpressions(t.Expr
 //	ARRAY['admin', 'moderator']      - Text array literal
 //	ARRAY(SELECT id FROM users)      - Array from subquery
 type ArrayConstructorExpression struct {
+	poolGuard
 	Elements []Expression     // Elements inside ARRAY[...]
 	Subquery *SelectStatement // For ARRAY(SELECT ...) syntax (optional)
 }
@@ -532,6 +544,7 @@ func (a ArrayConstructorExpression) Children() []Node {
 
 // UnaryExpression represents operations like NOT expr
 type UnaryExpression struct {
+	poolGuard
 	Operator UnaryOperator
 	Expr     Expression
 	Pos      models.Location // Source position of the operator (1-based line and column)
@@ -609,6 +622,7 @@ func (n NamedArgument) Children() []Node {
 // Server / BigQuery), which returns NULL on conversion failure instead of
 // raising an error.
 type CastExpression struct {
+	poolGuard
 	Expr Expression
 	Type string
 	Try  bool
@@ -630,6 +644,7 @@ func (c CastExpression) Children() []Node {
 
 // AliasedExpression represents an expression with an alias (expr AS alias)
 type AliasedExpression struct {
+	poolGuard
 	Expr  Expression
 	Alias string
 }
@@ -645,6 +660,7 @@ func (a AliasedExpression) Children() []Node {
 
 // ExtractExpression represents EXTRACT(field FROM source)
 type ExtractExpression struct {
+	poolGuard
 	Field  string
 	Source Expression
 }
@@ -660,6 +676,7 @@ func (e ExtractExpression) Children() []Node {
 
 // PositionExpression represents POSITION(substr IN str)
 type PositionExpression struct {
+	poolGuard
 	Substr Expression
 	Str    Expression
 }
@@ -679,6 +696,7 @@ func (p PositionExpression) Children() []Node {
 
 // SubstringExpression represents SUBSTRING(str FROM start [FOR length])
 type SubstringExpression struct {
+	poolGuard
 	Str    Expression
 	Start  Expression
 	Length Expression
@@ -697,6 +715,7 @@ func (s SubstringExpression) Children() []Node {
 // IntervalExpression represents INTERVAL 'value' for date/time arithmetic
 // Examples: INTERVAL '1 day', INTERVAL '2 hours', INTERVAL '1 year 2 months'
 type IntervalExpression struct {
+	poolGuard
 	Value string // The interval specification string (e.g., '1 day', '2 hours')
 }
 
@@ -718,6 +737,7 @@ func (i IntervalExpression) Children() []Node { return nil }
 //	arr[i]               - Subscript with variable
 //	(SELECT arr)[1]      - Subscript on subquery result
 type ArraySubscriptExpression struct {
+	poolGuard
 	Array   Expression   // The array expression being subscripted
 	Indices []Expression // Subscript indices (one or more for multi-dimensional arrays)
 }
@@ -747,6 +767,7 @@ func (a ArraySubscriptExpression) Children() []Node {
 //	arr[:5]     - Slice from start to index 5
 //	arr[:]      - Full array slice (copy)
 type ArraySliceExpression struct {
+	poolGuard
 	Array Expression // The array expression being sliced
 	Start Expression // Start index (nil means from beginning)
 	End   Expression // End index (nil means to end)
@@ -770,6 +791,7 @@ func (a ArraySliceExpression) Children() []Node {
 
 // UpdateExpression represents a column=value expression in UPDATE
 type UpdateExpression struct {
+	poolGuard
 	Column Expression
 	Value  Expression
 }

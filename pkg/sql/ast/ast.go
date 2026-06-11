@@ -112,6 +112,7 @@ func nodifyExpressions(exprs []Expression) []Node {
 
 // Identifier represents a column or table name
 type Identifier struct {
+	poolGuard
 	Name  string
 	Table string          // Optional table qualifier
 	Pos   models.Location // Source position of this identifier (1-based line and column)
@@ -123,6 +124,7 @@ func (i Identifier) Children() []Node     { return nil }
 
 // LiteralValue represents a literal value in SQL
 type LiteralValue struct {
+	poolGuard
 	Value interface{}
 	Type  string // INTEGER, FLOAT, STRING, BOOLEAN, NULL, etc.
 }
@@ -148,6 +150,7 @@ func (l LiteralValue) Children() []Node     { return nil }
 // SQL() returns the canonical SQL string for all statements joined by ";\n".
 // Span() returns the union of all statement spans for source-location tracking.
 type AST struct {
+	poolGuard
 	Statements []Statement
 	Comments   []models.Comment // Comments captured during tokenization, preserved during formatting
 }

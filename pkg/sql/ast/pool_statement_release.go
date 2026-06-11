@@ -16,7 +16,9 @@ package ast
 
 // GetInsertStatement gets an InsertStatement from the pool
 func GetInsertStatement() *InsertStatement {
-	return insertStmtPool.Get().(*InsertStatement)
+	x := insertStmtPool.Get().(*InsertStatement)
+	x.guardReset()
+	return x
 }
 
 // PutInsertStatement returns an InsertStatement to the pool.
@@ -32,6 +34,9 @@ func GetInsertStatement() *InsertStatement {
 //   - OnDuplicateKey.Updates (Column, Value)
 func PutInsertStatement(stmt *InsertStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -127,7 +132,9 @@ func PutInsertStatement(stmt *InsertStatement) {
 
 // GetUpdateStatement gets an UpdateStatement from the pool
 func GetUpdateStatement() *UpdateStatement {
-	return updateStmtPool.Get().(*UpdateStatement)
+	x := updateStmtPool.Get().(*UpdateStatement)
+	x.guardReset()
+	return x
 }
 
 // PutUpdateStatement returns an UpdateStatement to the pool.
@@ -140,6 +147,9 @@ func GetUpdateStatement() *UpdateStatement {
 //   - Returning
 func PutUpdateStatement(stmt *UpdateStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -194,7 +204,9 @@ func PutUpdateStatement(stmt *UpdateStatement) {
 
 // GetDeleteStatement gets a DeleteStatement from the pool
 func GetDeleteStatement() *DeleteStatement {
-	return deleteStmtPool.Get().(*DeleteStatement)
+	x := deleteStmtPool.Get().(*DeleteStatement)
+	x.guardReset()
+	return x
 }
 
 // PutDeleteStatement returns a DeleteStatement to the pool.
@@ -206,6 +218,9 @@ func GetDeleteStatement() *DeleteStatement {
 //   - Returning
 func PutDeleteStatement(stmt *DeleteStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -252,6 +267,7 @@ func PutDeleteStatement(stmt *DeleteStatement) {
 // GetSelectStatement gets a SelectStatement from the pool
 func GetSelectStatement() *SelectStatement {
 	stmt := selectStmtPool.Get().(*SelectStatement)
+	stmt.guardReset()
 	stmt.Columns = stmt.Columns[:0]
 	stmt.OrderBy = stmt.OrderBy[:0]
 	return stmt
@@ -285,6 +301,9 @@ func GetSelectStatement() *SelectStatement {
 //   - Limit / Offset (*int — no release needed)
 func PutSelectStatement(stmt *SelectStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -512,6 +531,7 @@ func releaseTableReference(tr *TableReference) {
 // GetCreateTableStatement gets a CreateTableStatement from the pool.
 func GetCreateTableStatement() *CreateTableStatement {
 	stmt := createTableStmtPool.Get().(*CreateTableStatement)
+	stmt.guardReset()
 	stmt.Columns = stmt.Columns[:0]
 	stmt.Constraints = stmt.Constraints[:0]
 	stmt.Inherits = stmt.Inherits[:0]
@@ -523,6 +543,9 @@ func GetCreateTableStatement() *CreateTableStatement {
 // It recursively releases any nested expressions (column defaults, check constraints, etc.).
 func PutCreateTableStatement(stmt *CreateTableStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -607,6 +630,7 @@ func PutCreateTableStatement(stmt *CreateTableStatement) {
 // GetAlterTableStatement gets an AlterTableStatement from the pool.
 func GetAlterTableStatement() *AlterTableStatement {
 	stmt := alterTableStmtPool.Get().(*AlterTableStatement)
+	stmt.guardReset()
 	stmt.Actions = stmt.Actions[:0]
 	return stmt
 }
@@ -615,6 +639,9 @@ func GetAlterTableStatement() *AlterTableStatement {
 // It recursively releases nested expressions in column definitions and constraints.
 func PutAlterTableStatement(stmt *AlterTableStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -649,6 +676,7 @@ func PutAlterTableStatement(stmt *AlterTableStatement) {
 // GetMergeStatement gets a MergeStatement from the pool.
 func GetMergeStatement() *MergeStatement {
 	stmt := mergeStmtPool.Get().(*MergeStatement)
+	stmt.guardReset()
 	stmt.WhenClauses = stmt.WhenClauses[:0]
 	stmt.Output = stmt.Output[:0]
 	return stmt
@@ -658,6 +686,9 @@ func GetMergeStatement() *MergeStatement {
 // It recursively releases nested expressions in WHEN clauses and OUTPUT.
 func PutMergeStatement(stmt *MergeStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -713,6 +744,7 @@ func PutMergeStatement(stmt *MergeStatement) {
 // GetReplaceStatement gets a ReplaceStatement from the pool.
 func GetReplaceStatement() *ReplaceStatement {
 	stmt := replaceStmtPool.Get().(*ReplaceStatement)
+	stmt.guardReset()
 	stmt.Columns = stmt.Columns[:0]
 	stmt.Values = stmt.Values[:0]
 	return stmt
@@ -722,6 +754,9 @@ func GetReplaceStatement() *ReplaceStatement {
 // It recursively releases nested column and value expressions.
 func PutReplaceStatement(stmt *ReplaceStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 

@@ -47,6 +47,92 @@ func ResetPoolLeakCount() {
 	atomic.StoreUint64(&poolLeakCount, 0)
 }
 
+// poolGuard detects double-release of pooled AST nodes.
+//
+// The pooling system is built on a SINGLE-OWNER contract: every node has
+// exactly one parent that releases it (directly via its typed Put
+// function, or recursively via releaseStatement / PutExpression). The
+// contract is violated when two wrappers share an aliased inner pointer —
+// the second release would re-pool a node the pool may already have
+// handed back to a different caller, silently corrupting both callers'
+// ASTs with zero signal.
+//
+// Go's type system cannot express ownership transfer of an interface
+// pointer, so the violation cannot be made unrepresentable; instead every
+// pooled node embeds this guard and every release path checks it:
+// a repeated release is REFUSED (the node is neither re-zeroed nor
+// re-pooled, and its children are not re-walked) and counted in
+// PoolDoubleReleaseCount. Get paths re-arm the guard.
+//
+// DETECTION LIMIT (ABA): the guard detects a repeated release only until
+// the pool RE-ISSUES the node — Get re-arms the guard, after which a
+// stale release by a previous owner is indistinguishable from the new
+// owner's legitimate release. Full detection would require ownership
+// tokens in the Put API (a breaking change); a reference count has the
+// same hole (1→0, re-issue →1, stale put →0). In practice the filed
+// hazard — two wrappers of one AST torn down together — has no
+// interleaved Get and is caught deterministically; the re-issue race is
+// pinned as a documented limit by
+// TestDoubleReleaseAfterReissueIsUndetectable.
+//
+// Note the guard covers pooled NODE types. Internal scratch pools that
+// hold non-node values (the *[]Expression slice pools) cannot carry a
+// guard; they are package-internal and never aliased across wrappers.
+type poolGuard struct {
+	released atomic.Bool
+}
+
+// guardRelease reports whether the node may be released. The first call
+// after construction or Get returns true and marks the node released; any
+// repeated call is a double-release: it is counted and refused. The CAS
+// makes detection sound across goroutines: when two owners race to
+// release the same aliased node, exactly one wins and the other is
+// counted — a plain bool would let both pass on an interleaved read.
+func (g *poolGuard) guardRelease() bool {
+	if !g.released.CompareAndSwap(false, true) {
+		atomic.AddUint64(&poolDoubleReleaseCount, 1)
+		return false
+	}
+	return true
+}
+
+// guardReset re-arms the guard when a node leaves the pool.
+func (g *poolGuard) guardReset() {
+	g.released.Store(false)
+}
+
+// releasable is implemented by every pooled node type via the embedded
+// poolGuard; PutExpression's iterative dispatch uses it to guard nodes
+// uniformly without per-case checks.
+type releasable interface {
+	guardRelease() bool
+}
+
+// poolDoubleReleaseCount counts refused releases of already-released
+// nodes. Non-zero values mean a caller violated the single-owner release
+// contract (most likely two wrappers aliasing one inner statement); the
+// release was refused, so the pool is NOT corrupted, but the caller bug
+// should be found and fixed. Exposed via PoolDoubleReleaseCount.
+var poolDoubleReleaseCount uint64
+
+// PoolDoubleReleaseCount returns the number of refused double-releases
+// since process start (or the last ResetPoolDoubleReleaseCount). Each one
+// is a caller bug: a pooled node was released twice, violating the
+// single-owner contract documented on poolGuard.
+//
+// A refusal returns early, so any Put-side accounting (e.g. the named
+// pool metrics in ReleaseAST) is intentionally skipped: Get/Put metric
+// counts diverge by exactly this counter's value.
+func PoolDoubleReleaseCount() uint64 {
+	return atomic.LoadUint64(&poolDoubleReleaseCount)
+}
+
+// ResetPoolDoubleReleaseCount zeroes the double-release counter.
+// Test-only helper.
+func ResetPoolDoubleReleaseCount() {
+	atomic.StoreUint64(&poolDoubleReleaseCount, 0)
+}
+
 // Pool configuration constants control cleanup behavior to prevent resource exhaustion.
 const (
 	// MaxCleanupDepth limits recursion depth to prevent stack overflow during cleanup.
@@ -472,7 +558,9 @@ var (
 // See also: ReleaseAST(), GetSelectStatement(), GetInsertStatement()
 func NewAST() *AST {
 	metrics.RecordNamedPoolGet("ast")
-	return astPool.Get().(*AST)
+	x := astPool.Get().(*AST)
+	x.guardReset()
+	return x
 }
 
 // ReleaseAST returns an AST container to the pool for reuse.
@@ -519,6 +607,9 @@ func NewAST() *AST {
 // See also: NewAST(), PutSelectStatement(), PutInsertStatement()
 func ReleaseAST(ast *AST) {
 	if ast == nil {
+		return
+	}
+	if !ast.guardRelease() {
 		return
 	}
 
@@ -625,6 +716,7 @@ func releaseStatement(stmt Statement) {
 // GetCreateIndexStatement gets a CreateIndexStatement from the pool.
 func GetCreateIndexStatement() *CreateIndexStatement {
 	stmt := createIndexStmtPool.Get().(*CreateIndexStatement)
+	stmt.guardReset()
 	stmt.Columns = stmt.Columns[:0]
 	return stmt
 }
@@ -633,6 +725,9 @@ func GetCreateIndexStatement() *CreateIndexStatement {
 // It releases the optional WHERE expression.
 func PutCreateIndexStatement(stmt *CreateIndexStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -659,6 +754,7 @@ func PutCreateIndexStatement(stmt *CreateIndexStatement) {
 // GetCreateViewStatement gets a CreateViewStatement from the pool.
 func GetCreateViewStatement() *CreateViewStatement {
 	stmt := createViewStmtPool.Get().(*CreateViewStatement)
+	stmt.guardReset()
 	stmt.Columns = stmt.Columns[:0]
 	return stmt
 }
@@ -667,6 +763,9 @@ func GetCreateViewStatement() *CreateViewStatement {
 // It recursively releases the nested query statement.
 func PutCreateViewStatement(stmt *CreateViewStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -687,6 +786,7 @@ func PutCreateViewStatement(stmt *CreateViewStatement) {
 // GetCreateMaterializedViewStatement gets a CreateMaterializedViewStatement from the pool.
 func GetCreateMaterializedViewStatement() *CreateMaterializedViewStatement {
 	stmt := createMaterializedViewStmtPool.Get().(*CreateMaterializedViewStatement)
+	stmt.guardReset()
 	stmt.Columns = stmt.Columns[:0]
 	return stmt
 }
@@ -695,6 +795,9 @@ func GetCreateMaterializedViewStatement() *CreateMaterializedViewStatement {
 // It recursively releases the nested query statement.
 func PutCreateMaterializedViewStatement(stmt *CreateMaterializedViewStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -713,12 +816,17 @@ func PutCreateMaterializedViewStatement(stmt *CreateMaterializedViewStatement) {
 
 // GetRefreshMaterializedViewStatement gets a RefreshMaterializedViewStatement from the pool.
 func GetRefreshMaterializedViewStatement() *RefreshMaterializedViewStatement {
-	return refreshMaterializedViewStmtPool.Get().(*RefreshMaterializedViewStatement)
+	x := refreshMaterializedViewStmtPool.Get().(*RefreshMaterializedViewStatement)
+	x.guardReset()
+	return x
 }
 
 // PutRefreshMaterializedViewStatement returns a RefreshMaterializedViewStatement to the pool.
 func PutRefreshMaterializedViewStatement(stmt *RefreshMaterializedViewStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -732,6 +840,7 @@ func PutRefreshMaterializedViewStatement(stmt *RefreshMaterializedViewStatement)
 // GetDropStatement gets a DropStatement from the pool.
 func GetDropStatement() *DropStatement {
 	stmt := dropStmtPool.Get().(*DropStatement)
+	stmt.guardReset()
 	stmt.Names = stmt.Names[:0]
 	return stmt
 }
@@ -739,6 +848,9 @@ func GetDropStatement() *DropStatement {
 // PutDropStatement returns a DropStatement to the pool.
 func PutDropStatement(stmt *DropStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -753,6 +865,7 @@ func PutDropStatement(stmt *DropStatement) {
 // GetTruncateStatement gets a TruncateStatement from the pool.
 func GetTruncateStatement() *TruncateStatement {
 	stmt := truncateStmtPool.Get().(*TruncateStatement)
+	stmt.guardReset()
 	stmt.Tables = stmt.Tables[:0]
 	return stmt
 }
@@ -760,6 +873,9 @@ func GetTruncateStatement() *TruncateStatement {
 // PutTruncateStatement returns a TruncateStatement to the pool.
 func PutTruncateStatement(stmt *TruncateStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -773,12 +889,17 @@ func PutTruncateStatement(stmt *TruncateStatement) {
 
 // GetShowStatement gets a ShowStatement from the pool.
 func GetShowStatement() *ShowStatement {
-	return showStmtPool.Get().(*ShowStatement)
+	x := showStmtPool.Get().(*ShowStatement)
+	x.guardReset()
+	return x
 }
 
 // PutShowStatement returns a ShowStatement to the pool.
 func PutShowStatement(stmt *ShowStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -791,12 +912,17 @@ func PutShowStatement(stmt *ShowStatement) {
 
 // GetDescribeStatement gets a DescribeStatement from the pool.
 func GetDescribeStatement() *DescribeStatement {
-	return describeStmtPool.Get().(*DescribeStatement)
+	x := describeStmtPool.Get().(*DescribeStatement)
+	x.guardReset()
+	return x
 }
 
 // PutDescribeStatement returns a DescribeStatement to the pool.
 func PutDescribeStatement(stmt *DescribeStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -807,7 +933,9 @@ func PutDescribeStatement(stmt *DescribeStatement) {
 
 // GetExplainStatement gets an ExplainStatement from the pool.
 func GetExplainStatement() *ExplainStatement {
-	return explainStmtPool.Get().(*ExplainStatement)
+	x := explainStmtPool.Get().(*ExplainStatement)
+	x.guardReset()
+	return x
 }
 
 // PutExplainStatement returns an ExplainStatement to the pool.
@@ -817,6 +945,9 @@ func GetExplainStatement() *ExplainStatement {
 // must not retain aliases to the inner after calling this.
 func PutExplainStatement(stmt *ExplainStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -830,12 +961,17 @@ func PutExplainStatement(stmt *ExplainStatement) {
 
 // GetUnsupportedStatement gets an UnsupportedStatement from the pool.
 func GetUnsupportedStatement() *UnsupportedStatement {
-	return unsupportedStmtPool.Get().(*UnsupportedStatement)
+	x := unsupportedStmtPool.Get().(*UnsupportedStatement)
+	x.guardReset()
+	return x
 }
 
 // PutUnsupportedStatement returns an UnsupportedStatement to the pool.
 func PutUnsupportedStatement(stmt *UnsupportedStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -847,7 +983,9 @@ func PutUnsupportedStatement(stmt *UnsupportedStatement) {
 
 // GetAlterStatement gets an AlterStatement from the pool.
 func GetAlterStatement() *AlterStatement {
-	return alterStmtPool.Get().(*AlterStatement)
+	x := alterStmtPool.Get().(*AlterStatement)
+	x.guardReset()
+	return x
 }
 
 // PutAlterStatement returns an AlterStatement to the pool.
@@ -855,6 +993,9 @@ func GetAlterStatement() *AlterStatement {
 // its internal allocations are not recursively pooled (they use custom types).
 func PutAlterStatement(stmt *AlterStatement) {
 	if stmt == nil {
+		return
+	}
+	if !stmt.guardRelease() {
 		return
 	}
 
@@ -867,34 +1008,79 @@ func PutAlterStatement(stmt *AlterStatement) {
 
 // NewCreateSequenceStatement retrieves a CreateSequenceStatement from the pool.
 func NewCreateSequenceStatement() *CreateSequenceStatement {
-	return createSequencePool.Get().(*CreateSequenceStatement)
+	x := createSequencePool.Get().(*CreateSequenceStatement)
+	x.guardReset()
+	return x
 }
 
 // ReleaseCreateSequenceStatement returns a CreateSequenceStatement to the pool.
 func ReleaseCreateSequenceStatement(s *CreateSequenceStatement) {
-	*s = CreateSequenceStatement{} // zero all fields
+	if s == nil || !s.guardRelease() {
+		return
+	}
+	// Release the pooled name identifier before the wipe drops it.
+	// (Concrete-type nil check: a typed nil inside the Expression
+	// interface would not compare equal to nil in PutExpression.)
+	if s.Name != nil {
+		PutExpression(s.Name)
+	}
+	// Zero all fields, then re-mark released: the whole-struct wipe
+	// resets the embedded guard, and a pooled node must read as
+	// released until Get re-arms it.
+	*s = CreateSequenceStatement{}
+	s.released.Store(true)
 	createSequencePool.Put(s)
 }
 
 // NewDropSequenceStatement retrieves a DropSequenceStatement from the pool.
 func NewDropSequenceStatement() *DropSequenceStatement {
-	return dropSequencePool.Get().(*DropSequenceStatement)
+	x := dropSequencePool.Get().(*DropSequenceStatement)
+	x.guardReset()
+	return x
 }
 
 // ReleaseDropSequenceStatement returns a DropSequenceStatement to the pool.
 // Always call this with defer after parsing is complete.
 func ReleaseDropSequenceStatement(s *DropSequenceStatement) {
-	*s = DropSequenceStatement{} // zero all fields
+	if s == nil || !s.guardRelease() {
+		return
+	}
+	// Release the pooled name identifier before the wipe drops it.
+	// (Concrete-type nil check: a typed nil inside the Expression
+	// interface would not compare equal to nil in PutExpression.)
+	if s.Name != nil {
+		PutExpression(s.Name)
+	}
+	// Zero all fields, then re-mark released: the whole-struct wipe
+	// resets the embedded guard, and a pooled node must read as
+	// released until Get re-arms it.
+	*s = DropSequenceStatement{}
+	s.released.Store(true)
 	dropSequencePool.Put(s)
 }
 
 // NewAlterSequenceStatement retrieves an AlterSequenceStatement from the pool.
 func NewAlterSequenceStatement() *AlterSequenceStatement {
-	return alterSequencePool.Get().(*AlterSequenceStatement)
+	x := alterSequencePool.Get().(*AlterSequenceStatement)
+	x.guardReset()
+	return x
 }
 
 // ReleaseAlterSequenceStatement returns an AlterSequenceStatement to the pool.
 func ReleaseAlterSequenceStatement(s *AlterSequenceStatement) {
-	*s = AlterSequenceStatement{} // zero all fields
+	if s == nil || !s.guardRelease() {
+		return
+	}
+	// Release the pooled name identifier before the wipe drops it.
+	// (Concrete-type nil check: a typed nil inside the Expression
+	// interface would not compare equal to nil in PutExpression.)
+	if s.Name != nil {
+		PutExpression(s.Name)
+	}
+	// Zero all fields, then re-mark released: the whole-struct wipe
+	// resets the embedded guard, and a pooled node must read as
+	// released until Get re-arms it.
+	*s = AlterSequenceStatement{}
+	s.released.Store(true)
 	alterSequencePool.Put(s)
 }

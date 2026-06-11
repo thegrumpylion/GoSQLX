@@ -117,6 +117,7 @@ func (s SetOperation) Children() []Node {
 //   - Enhanced LATERAL JOIN support via TableReference.Lateral
 //   - FILTER clause support via FunctionCall.Filter
 type SelectStatement struct {
+	poolGuard
 	With              *WithClause
 	Distinct          bool
 	DistinctOnColumns []Expression // PostgreSQL DISTINCT ON (expr, ...) clause
@@ -207,6 +208,7 @@ func (s SelectStatement) Children() []Node {
 
 // InsertStatement represents an INSERT SQL statement
 type InsertStatement struct {
+	poolGuard
 	With           *WithClause
 	TableName      string
 	Columns        []Expression
@@ -263,6 +265,7 @@ func (v Values) Children() []Node {
 
 // UpdateStatement represents an UPDATE SQL statement
 type UpdateStatement struct {
+	poolGuard
 	With        *WithClause
 	TableName   string
 	Alias       string
@@ -305,6 +308,7 @@ func (u UpdateStatement) Children() []Node {
 
 // CreateTableStatement represents a CREATE TABLE statement
 type CreateTableStatement struct {
+	poolGuard
 	IfNotExists  bool
 	Temporary    bool
 	Name         string
@@ -349,6 +353,7 @@ func (c CreateTableStatement) Children() []Node {
 
 // DeleteStatement represents a DELETE SQL statement
 type DeleteStatement struct {
+	poolGuard
 	With      *WithClause
 	TableName string
 	Alias     string
@@ -395,6 +400,7 @@ func (d DeleteStatement) Children() []Node {
 //	stmt := tree.Statements[0].(*ast.AlterStatement)
 //	tableName := stmt.Name // AlterStatement.Name holds the table name
 type AlterTableStatement struct {
+	poolGuard
 	Table   string
 	Actions []AlterTableAction
 }
@@ -433,6 +439,7 @@ func (a AlterTableAction) Children() []Node {
 
 // CreateIndexStatement represents a CREATE INDEX statement
 type CreateIndexStatement struct {
+	poolGuard
 	Unique      bool
 	IfNotExists bool
 	Name        string
@@ -463,6 +470,7 @@ func (c CreateIndexStatement) Children() []Node {
 //	WHEN NOT MATCHED THEN INSERT
 //	WHEN NOT MATCHED BY SOURCE THEN UPDATE/DELETE
 type MergeStatement struct {
+	poolGuard
 	TargetTable TableReference     // The table being merged into
 	TargetAlias string             // Optional alias for target
 	SourceTable TableReference     // The source table or subquery
@@ -549,6 +557,7 @@ func (s SetClause) Children() []Node {
 // CreateViewStatement represents a CREATE VIEW statement
 // Syntax: CREATE [OR REPLACE] [TEMP|TEMPORARY] VIEW [IF NOT EXISTS] name [(columns)] AS select
 type CreateViewStatement struct {
+	poolGuard
 	OrReplace   bool
 	Temporary   bool
 	IfNotExists bool
@@ -570,6 +579,7 @@ func (c CreateViewStatement) Children() []Node {
 // CreateMaterializedViewStatement represents a CREATE MATERIALIZED VIEW statement
 // Syntax: CREATE MATERIALIZED VIEW [IF NOT EXISTS] name [(columns)] AS select [WITH [NO] DATA]
 type CreateMaterializedViewStatement struct {
+	poolGuard
 	IfNotExists bool
 	Name        string
 	Columns     []string  // Optional column list
@@ -590,6 +600,7 @@ func (c CreateMaterializedViewStatement) Children() []Node {
 // RefreshMaterializedViewStatement represents a REFRESH MATERIALIZED VIEW statement
 // Syntax: REFRESH MATERIALIZED VIEW [CONCURRENTLY] name [WITH [NO] DATA]
 type RefreshMaterializedViewStatement struct {
+	poolGuard
 	Concurrently bool
 	Name         string
 	WithData     *bool // nil = default, true = WITH DATA, false = WITH NO DATA
@@ -602,6 +613,7 @@ func (r RefreshMaterializedViewStatement) Children() []Node     { return nil }
 // DropStatement represents a DROP statement for tables, views, indexes, etc.
 // Syntax: DROP object_type [IF EXISTS] name [CASCADE|RESTRICT]
 type DropStatement struct {
+	poolGuard
 	ObjectType  string // TABLE, VIEW, MATERIALIZED VIEW, INDEX, etc.
 	IfExists    bool
 	Names       []string // Can drop multiple objects
@@ -615,6 +627,7 @@ func (d DropStatement) Children() []Node     { return nil }
 // TruncateStatement represents a TRUNCATE TABLE statement
 // Syntax: TRUNCATE [TABLE] table_name [, table_name ...] [RESTART IDENTITY | CONTINUE IDENTITY] [CASCADE | RESTRICT]
 type TruncateStatement struct {
+	poolGuard
 	Tables           []string // Table names to truncate
 	RestartIdentity  bool     // RESTART IDENTITY - reset sequences
 	ContinueIdentity bool     // CONTINUE IDENTITY - keep sequences (default)
@@ -639,6 +652,7 @@ func (p PragmaStatement) Children() []Node     { return nil }
 
 // ShowStatement represents MySQL SHOW commands (SHOW TABLES, SHOW DATABASES, SHOW CREATE TABLE x, etc.)
 type ShowStatement struct {
+	poolGuard
 	ShowType   string // TABLES, DATABASES, CREATE TABLE, COLUMNS, INDEX, etc.
 	ObjectName string // For SHOW CREATE TABLE x, SHOW COLUMNS FROM x, etc.
 	From       string // For SHOW ... FROM database
@@ -650,6 +664,7 @@ func (s ShowStatement) Children() []Node     { return nil }
 
 // DescribeStatement represents MySQL DESCRIBE/DESC/EXPLAIN table commands
 type DescribeStatement struct {
+	poolGuard
 	TableName string
 }
 
@@ -666,6 +681,7 @@ func (d DescribeStatement) Children() []Node     { return nil }
 // switch stmt.(type) should handle this case explicitly rather than
 // falling through to a default that assumes the statement is well-structured.
 type UnsupportedStatement struct {
+	poolGuard
 	Kind   string // Operation kind: "USE", "COPY", "PUT", "GET", "LIST", "REMOVE", "CREATE STAGE", etc.
 	RawSQL string // Original SQL fragment for round-trip fidelity
 }
@@ -689,6 +705,7 @@ func (u *UnsupportedStatement) SQL() string {
 // of the inner is transferred to the ExplainStatement; pooled release via
 // PutExplainStatement recursively releases the inner.
 type ExplainStatement struct {
+	poolGuard
 	Statement Statement
 	Analyze   bool
 	Format    string
@@ -705,6 +722,7 @@ func (e ExplainStatement) Children() []Node {
 
 // ReplaceStatement represents MySQL REPLACE INTO statement
 type ReplaceStatement struct {
+	poolGuard
 	TableName string
 	Columns   []Expression
 	Values    [][]Expression
@@ -753,6 +771,7 @@ type SequenceOptions struct {
 //
 //	CREATE [OR REPLACE] SEQUENCE [IF NOT EXISTS] name [options...]
 type CreateSequenceStatement struct {
+	poolGuard
 	Name        *Identifier
 	OrReplace   bool
 	IfNotExists bool
@@ -773,6 +792,7 @@ func (s *CreateSequenceStatement) Children() []Node {
 //
 //	DROP SEQUENCE [IF EXISTS | IF NOT EXISTS] name
 type DropSequenceStatement struct {
+	poolGuard
 	Name     *Identifier
 	IfExists bool
 	Pos      models.Location // Source position of the DROP keyword (1-based line and column)
@@ -791,6 +811,7 @@ func (s *DropSequenceStatement) Children() []Node {
 //
 //	ALTER SEQUENCE [IF EXISTS] name [options...]
 type AlterSequenceStatement struct {
+	poolGuard
 	Name     *Identifier
 	IfExists bool
 	Options  SequenceOptions

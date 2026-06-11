@@ -20,12 +20,17 @@ import (
 
 // GetUpdateExpression gets an UpdateExpression from the pool
 func GetUpdateExpression() *UpdateExpression {
-	return updateExprPool.Get().(*UpdateExpression)
+	x := updateExprPool.Get().(*UpdateExpression)
+	x.guardReset()
+	return x
 }
 
 // PutUpdateExpression returns an UpdateExpression to the pool
 func PutUpdateExpression(expr *UpdateExpression) {
 	if expr == nil {
+		return
+	}
+	if !expr.guardRelease() {
 		return
 	}
 
@@ -43,12 +48,17 @@ func PutUpdateExpression(expr *UpdateExpression) {
 
 // GetIdentifier gets an Identifier from the pool
 func GetIdentifier() *Identifier {
-	return identifierPool.Get().(*Identifier)
+	x := identifierPool.Get().(*Identifier)
+	x.guardReset()
+	return x
 }
 
 // PutIdentifier returns an Identifier to the pool
 func PutIdentifier(ident *Identifier) {
 	if ident == nil {
+		return
+	}
+	if !ident.guardRelease() {
 		return
 	}
 	ident.Name = ""
@@ -57,12 +67,17 @@ func PutIdentifier(ident *Identifier) {
 
 // GetBinaryExpression gets a BinaryExpression from the pool
 func GetBinaryExpression() *BinaryExpression {
-	return binaryExprPool.Get().(*BinaryExpression)
+	x := binaryExprPool.Get().(*BinaryExpression)
+	x.guardReset()
+	return x
 }
 
 // PutBinaryExpression returns a BinaryExpression to the pool
 func PutBinaryExpression(expr *BinaryExpression) {
 	if expr == nil {
+		return
+	}
+	if !expr.guardRelease() {
 		return
 	}
 	PutExpression(expr.Left)
@@ -94,12 +109,17 @@ func PutExpressionSlice(slice *[]Expression) {
 
 // GetLiteralValue gets a LiteralValue from the pool
 func GetLiteralValue() *LiteralValue {
-	return literalValuePool.Get().(*LiteralValue)
+	x := literalValuePool.Get().(*LiteralValue)
+	x.guardReset()
+	return x
 }
 
 // PutLiteralValue returns a LiteralValue to the pool
 func PutLiteralValue(lit *LiteralValue) {
 	if lit == nil {
+		return
+	}
+	if !lit.guardRelease() {
 		return
 	}
 
@@ -234,6 +254,15 @@ func putExpressionImpl(expr Expression, depth int) {
 		processed++
 
 		if current == nil {
+			continue
+		}
+
+		// Guard before walking: an already-released node must be skipped
+		// entirely — its children were released with it, and re-walking
+		// them would release nodes the pool may have already handed to
+		// another caller. The typed case bodies below pool directly and
+		// rely on this single check.
+		if g, ok := current.(releasable); ok && !g.guardRelease() {
 			continue
 		}
 
@@ -454,6 +483,20 @@ func putExpressionImpl(expr Expression, depth int) {
 			e.Operator = 0 // UnaryOperator is int type
 			unaryExprPool.Put(e)
 
+		case *UpdateExpression:
+			// Without this case the pre-switch guard consumed the flag
+			// while the default case dropped the node un-pooled: a later
+			// typed PutUpdateExpression then refused and false-counted.
+			if e.Column != nil {
+				workQueue = append(workQueue, e.Column)
+			}
+			if e.Value != nil {
+				workQueue = append(workQueue, e.Value)
+			}
+			e.Column = nil
+			e.Value = nil
+			updateExprPool.Put(e)
+
 		case *ExtractExpression:
 			if e.Source != nil {
 				workQueue = append(workQueue, e.Source)
@@ -524,6 +567,7 @@ func putExpressionImpl(expr Expression, depth int) {
 // GetFunctionCall gets a FunctionCall from the pool
 func GetFunctionCall() *FunctionCall {
 	fc := functionCallPool.Get().(*FunctionCall)
+	fc.guardReset()
 	fc.Arguments = fc.Arguments[:0]
 	return fc
 }
@@ -531,6 +575,9 @@ func GetFunctionCall() *FunctionCall {
 // PutFunctionCall returns a FunctionCall to the pool
 func PutFunctionCall(fc *FunctionCall) {
 	if fc == nil {
+		return
+	}
+	if !fc.guardRelease() {
 		return
 	}
 	for i := range fc.Arguments {
@@ -548,6 +595,7 @@ func PutFunctionCall(fc *FunctionCall) {
 // GetCaseExpression gets a CaseExpression from the pool
 func GetCaseExpression() *CaseExpression {
 	ce := caseExprPool.Get().(*CaseExpression)
+	ce.guardReset()
 	ce.WhenClauses = ce.WhenClauses[:0]
 	return ce
 }
@@ -555,6 +603,9 @@ func GetCaseExpression() *CaseExpression {
 // PutCaseExpression returns a CaseExpression to the pool
 func PutCaseExpression(ce *CaseExpression) {
 	if ce == nil {
+		return
+	}
+	if !ce.guardRelease() {
 		return
 	}
 	PutExpression(ce.Value)
@@ -571,12 +622,17 @@ func PutCaseExpression(ce *CaseExpression) {
 
 // GetBetweenExpression gets a BetweenExpression from the pool
 func GetBetweenExpression() *BetweenExpression {
-	return betweenExprPool.Get().(*BetweenExpression)
+	x := betweenExprPool.Get().(*BetweenExpression)
+	x.guardReset()
+	return x
 }
 
 // PutBetweenExpression returns a BetweenExpression to the pool
 func PutBetweenExpression(be *BetweenExpression) {
 	if be == nil {
+		return
+	}
+	if !be.guardRelease() {
 		return
 	}
 	PutExpression(be.Expr)
@@ -592,6 +648,7 @@ func PutBetweenExpression(be *BetweenExpression) {
 // GetInExpression gets an InExpression from the pool
 func GetInExpression() *InExpression {
 	ie := inExprPool.Get().(*InExpression)
+	ie.guardReset()
 	ie.List = ie.List[:0]
 	return ie
 }
@@ -599,6 +656,9 @@ func GetInExpression() *InExpression {
 // PutInExpression returns an InExpression to the pool
 func PutInExpression(ie *InExpression) {
 	if ie == nil {
+		return
+	}
+	if !ie.guardRelease() {
 		return
 	}
 	PutExpression(ie.Expr)
@@ -621,6 +681,7 @@ func PutInExpression(ie *InExpression) {
 // GetTupleExpression gets a TupleExpression from the pool
 func GetTupleExpression() *TupleExpression {
 	te := tupleExprPool.Get().(*TupleExpression)
+	te.guardReset()
 	te.Expressions = te.Expressions[:0]
 	return te
 }
@@ -628,6 +689,9 @@ func GetTupleExpression() *TupleExpression {
 // PutTupleExpression returns a TupleExpression to the pool
 func PutTupleExpression(te *TupleExpression) {
 	if te == nil {
+		return
+	}
+	if !te.guardRelease() {
 		return
 	}
 	for i := range te.Expressions {
@@ -641,6 +705,7 @@ func PutTupleExpression(te *TupleExpression) {
 // GetArrayConstructor gets an ArrayConstructorExpression from the pool
 func GetArrayConstructor() *ArrayConstructorExpression {
 	ac := arrayConstructorPool.Get().(*ArrayConstructorExpression)
+	ac.guardReset()
 	ac.Elements = ac.Elements[:0]
 	ac.Subquery = nil
 	return ac
@@ -649,6 +714,9 @@ func GetArrayConstructor() *ArrayConstructorExpression {
 // PutArrayConstructor returns an ArrayConstructorExpression to the pool
 func PutArrayConstructor(ac *ArrayConstructorExpression) {
 	if ac == nil {
+		return
+	}
+	if !ac.guardRelease() {
 		return
 	}
 	for i := range ac.Elements {
@@ -666,12 +734,17 @@ func PutArrayConstructor(ac *ArrayConstructorExpression) {
 
 // GetSubqueryExpression gets a SubqueryExpression from the pool
 func GetSubqueryExpression() *SubqueryExpression {
-	return subqueryExprPool.Get().(*SubqueryExpression)
+	x := subqueryExprPool.Get().(*SubqueryExpression)
+	x.guardReset()
+	return x
 }
 
 // PutSubqueryExpression returns a SubqueryExpression to the pool
 func PutSubqueryExpression(se *SubqueryExpression) {
 	if se == nil {
+		return
+	}
+	if !se.guardRelease() {
 		return
 	}
 	// Subquery is a Statement — release it through the statement dispatcher.
@@ -684,12 +757,17 @@ func PutSubqueryExpression(se *SubqueryExpression) {
 
 // GetCastExpression gets a CastExpression from the pool
 func GetCastExpression() *CastExpression {
-	return castExprPool.Get().(*CastExpression)
+	x := castExprPool.Get().(*CastExpression)
+	x.guardReset()
+	return x
 }
 
 // PutCastExpression returns a CastExpression to the pool
 func PutCastExpression(ce *CastExpression) {
 	if ce == nil {
+		return
+	}
+	if !ce.guardRelease() {
 		return
 	}
 	PutExpression(ce.Expr)
@@ -700,12 +778,17 @@ func PutCastExpression(ce *CastExpression) {
 
 // GetIntervalExpression gets an IntervalExpression from the pool
 func GetIntervalExpression() *IntervalExpression {
-	return intervalExprPool.Get().(*IntervalExpression)
+	x := intervalExprPool.Get().(*IntervalExpression)
+	x.guardReset()
+	return x
 }
 
 // PutIntervalExpression returns an IntervalExpression to the pool
 func PutIntervalExpression(ie *IntervalExpression) {
 	if ie == nil {
+		return
+	}
+	if !ie.guardRelease() {
 		return
 	}
 	ie.Value = ""
@@ -714,12 +797,17 @@ func PutIntervalExpression(ie *IntervalExpression) {
 
 // GetAliasedExpression retrieves an AliasedExpression from the pool
 func GetAliasedExpression() *AliasedExpression {
-	return aliasedExprPool.Get().(*AliasedExpression)
+	x := aliasedExprPool.Get().(*AliasedExpression)
+	x.guardReset()
+	return x
 }
 
 // PutAliasedExpression returns an AliasedExpression to the pool
 func PutAliasedExpression(ae *AliasedExpression) {
 	if ae == nil {
+		return
+	}
+	if !ae.guardRelease() {
 		return
 	}
 	PutExpression(ae.Expr)
@@ -730,12 +818,17 @@ func PutAliasedExpression(ae *AliasedExpression) {
 
 // GetArraySubscriptExpression gets an ArraySubscriptExpression from the pool
 func GetArraySubscriptExpression() *ArraySubscriptExpression {
-	return arraySubscriptExprPool.Get().(*ArraySubscriptExpression)
+	x := arraySubscriptExprPool.Get().(*ArraySubscriptExpression)
+	x.guardReset()
+	return x
 }
 
 // PutArraySubscriptExpression returns an ArraySubscriptExpression to the pool
 func PutArraySubscriptExpression(ase *ArraySubscriptExpression) {
 	if ase == nil {
+		return
+	}
+	if !ase.guardRelease() {
 		return
 	}
 	// Clean up array expression
@@ -755,12 +848,17 @@ func PutArraySubscriptExpression(ase *ArraySubscriptExpression) {
 
 // GetArraySliceExpression gets an ArraySliceExpression from the pool
 func GetArraySliceExpression() *ArraySliceExpression {
-	return arraySliceExprPool.Get().(*ArraySliceExpression)
+	x := arraySliceExprPool.Get().(*ArraySliceExpression)
+	x.guardReset()
+	return x
 }
 
 // PutArraySliceExpression returns an ArraySliceExpression to the pool
 func PutArraySliceExpression(ase *ArraySliceExpression) {
 	if ase == nil {
+		return
+	}
+	if !ase.guardRelease() {
 		return
 	}
 	// Clean up array expression

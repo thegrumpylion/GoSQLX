@@ -92,6 +92,7 @@ func (opt NullsDistinctOption) String() string {
 
 // AlterStatement represents an ALTER statement
 type AlterStatement struct {
+	poolGuard
 	Type      AlterType
 	Name      string // Name of the object being altered
 	Operation AlterOperation
